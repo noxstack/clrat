@@ -5,16 +5,50 @@ class WebRTCService {
   RTCPeerConnection? _peerConnection;
   WebSocketChannel? _signalingChannel;
 
-  Future<void> initialize() async {
-    _peerConnection = await createPeerConnection({
-      'iceServers': [{'urls': 'stun:stun.l.google.com:19302'}]
-    });
-  }
+ Future<void> connectSignaling(String wsUrl) async {
+  _signalingChannel = WebSocketChannel.connect(Uri.parse(wsUrl));
+  _signalingChannel!.stream.listen((message) {
+    final data = jsonDecode(message);
+    if (data['type'] == 'answer') {
+      _peerConnection!.setRemoteDescription(RTCSessionDescription(
+        data['sdp'],
+        data['type'],
+      ));
+    } else if (data['type'] == 'ice_candidate') {
+      _peerConnection!.addCandidate(RTCIceCandidate(
+        data['candidate'],
+        data['sdpMid'],
+        data['sdpMLineIndex'],
+      ));
+    }
+  });
+}
 
-  Future<void> connectSignaling(String wsUrl) async {
-    _signalingChannel = WebSocketChannel.connect(Uri.parse(wsUrl));
-    _signalingChannel!.stream.listen((message) {
-      // Handle incoming signaling messages
-    });
-  }
+Future<void> sendOffer() async {
+  final offer = await _peerConnection!.createOffer();
+  await _peerConnection!.setLocalDescription(offer);
+  _signalingChannel!.sink.add(jsonEncode({
+    'type': 'offer',
+    'sdp': offer.sdp,
+  }));
+}
+// Add to WebRTCService class
+Future<void> handleNegotiation() async {
+  _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
+    _signalingChannel!.sink.add(jsonEncode({
+      'type': 'ice_candidate',
+      'candidate': candidate.candidate,
+      'sdpMid': candidate.sdpMid,
+      'sdpMLineIndex': candidate.sdpMLineIndex,
+    }));
+  };
+
+  _peerConnection!.onRenegotiationNeeded = () async {
+    final offer = await _peerConnection!.createOffer();
+    await _peerConnection!.setLocalDescription(offer);
+    _signalingChannel!.sink.add(jsonEncode({
+      'type': 'offer',
+      'sdp': offer.sdp,
+    }));
+  };
 }
